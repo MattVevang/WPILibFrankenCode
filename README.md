@@ -100,9 +100,60 @@ gh copilot suggest "how to create a WPILib command-based robot"
 gh copilot explain "what does GradleRIO do"
 ```
 
+## Windows ARM64 Support
+
+A dedicated ARM64 variant is available: `Install-WPILibFrankenCode-ARM64.ps1`
+
+This script uses the same x64 WPILib ISO (there is no official ARM64 ISO) but intelligently replaces architecture-sensitive components:
+
+### ARM64 Component Matrix
+
+| Component | ARM64 Strategy | Performance |
+|---|---|---|
+| **JDK 17** | Microsoft OpenJDK 17 ARM64 (downloaded separately) | **Native** |
+| **Gradle** | Pure Java — runs on ARM64 JDK | **Native** |
+| **Maven offline repo** | Architecture-independent JAR files | **Native** |
+| **WPILib extension** | Pure JS — architecture-independent | **Native** |
+| **Java debug/deps extensions** | Pure JS — architecture-independent | **Native** |
+| **cpptools extension** | Downloaded from Marketplace (auto-selects ARM64) | **Native** |
+| **redhat.java extension** | Downloaded from Marketplace (auto-selects ARM64) | **Native** |
+| **Java tools** (Shuffleboard, PathWeaver, etc.) | Runs on ARM64 JDK | **Native** |
+| **AdvantageScope** | ARM64 build downloaded from GitHub releases | **Native** |
+| **roboRIO toolchain** (GCC cross-compiler) | x64 binaries under Prism emulation | ~30-50% slower |
+| **Native tools** (Glass, SysId, DataLogTool) | x64 binaries under Prism emulation | ~20-30% slower |
+| **Elastic Dashboard** | x64 Flutter app under Prism emulation | ~20-30% slower |
+
+### ARM64 Quick Start
+
+```powershell
+# Open PowerShell as Administrator on your ARM64 device, then:
+cd C:\src\WPILibFrankenCode
+.\Install-WPILibFrankenCode-ARM64.ps1
+```
+
+### ARM64 Options
+
+```powershell
+# Use x64 JDK from ISO under emulation (skip downloading ARM64 JDK)
+.\Install-WPILibFrankenCode-ARM64.ps1 -SkipJdkReplace
+
+# Skip ARM64 AdvantageScope download (use x64 from ISO)
+.\Install-WPILibFrankenCode-ARM64.ps1 -SkipAdvantageScopeArm64
+
+# All standard options (-Force, -SkipDownload, etc.) also work
+.\Install-WPILibFrankenCode-ARM64.ps1 -Force -SkipDownload
+```
+
+### Key Technical Details
+
+- **Windows 11 Prism emulator** handles all x64 components transparently
+- The script detects whether VS Code itself is ARM64-native and adjusts extension strategy accordingly
+- **Java builds run at full native speed** — only C++ cross-compilation is affected by emulation
+- The verification phase includes an ARM64 Architecture Report showing which components are native vs emulated
+
 ## Idempotency
 
-The script is safe to re-run. It checks for existing installations, validates component presence, and only overwrites when using `-Force`. The ISO download is skipped automatically if the file already exists at the expected size.
+The scripts are safe to re-run. They check for existing installations, validate component presence, and only overwrite when using `-Force`. The ISO download is skipped automatically if the file already exists at the expected size.
 
 ## License
 
