@@ -104,24 +104,47 @@ gh copilot explain "what does GradleRIO do"
 
 A dedicated ARM64 variant is available: `Install-WPILibFrankenCode-ARM64.ps1`
 
-This script uses the same x64 WPILib ISO (there is no official ARM64 ISO) but intelligently replaces architecture-sensitive components:
+This script uses the same x64 WPILib ISO (there is no official ARM64 ISO) but adapts architecture-sensitive components for ARM64 Windows. **By default it uses the x64 JDK under Prism emulation** to ensure full compatibility with simulation and unit tests.
 
-### ARM64 Component Matrix
+> **Official WPILib ARM64 support is expected in 2027** ([allwpilib #3165](https://github.com/wpilibsuite/allwpilib/issues/3165)). This installer serves the gap between now and then.
 
-| Component | ARM64 Strategy | Performance |
+### Known Limitations on ARM64
+
+| Issue | Severity | Detail |
 |---|---|---|
-| **JDK 17** | Microsoft OpenJDK 17 ARM64 (downloaded separately) | **Native** |
-| **Gradle** | Pure Java — runs on ARM64 JDK | **Native** |
-| **Maven offline repo** | Architecture-independent JAR files | **Native** |
-| **WPILib extension** | Pure JS — architecture-independent | **Native** |
-| **Java debug/deps extensions** | Pure JS — architecture-independent | **Native** |
-| **cpptools extension** | Downloaded from Marketplace (auto-selects ARM64) | **Native** |
-| **redhat.java extension** | Downloaded from Marketplace (auto-selects ARM64) | **Native** |
-| **Java tools** (Shuffleboard, PathWeaver, etc.) | Runs on ARM64 JDK | **Native** |
-| **AdvantageScope** | ARM64 build downloaded from GitHub releases | **Native** |
-| **roboRIO toolchain** (GCC cross-compiler) | x64 binaries under Prism emulation | ~30-50% slower |
-| **Native tools** (Glass, SysId, DataLogTool) | x64 binaries under Prism emulation | ~20-30% slower |
-| **Elastic Dashboard** | x64 Flutter app under Prism emulation | ~20-30% slower |
+| **JNI simulation (with `-UseArm64Jdk`)** | **BLOCKER** | ARM64 JVM cannot load x64 native DLLs. `simulateJava`, `simulateNative`, and JNI-based unit tests fail with `UnsatisfiedLinkError`. **Default config (x64 JDK) avoids this.** |
+| **GradleRIO resolution (with `-UseArm64Jdk`)** | HIGH | ARM64 JDK reports `os.arch=aarch64`, causing Gradle to resolve `windowsarm64` native artifacts. Vendor libraries (CTRE, REV, PhotonVision) don't publish these. |
+| **No official support** | MEDIUM | WPILib requirements state "Arm is not supported." Untested by the WPILib team on Windows ARM64 hardware until recently. |
+| **NI kernel drivers** | MEDIUM | FRC Driver Station and roboRIO Imaging Tool run under x64 emulation, but their USB kernel drivers may require ARM64-native builds. Network-based deploy is unaffected. |
+| **C++ desktop builds** | LOW | Gradle's native C++ plugin doesn't support ARM64 Windows hosts. C++ builds use the x64 GCC cross-compiler under emulation (~30-50% slower). |
+| **Elastic Dashboard** | LOW | No ARM64 build exists (Flutter). Runs under x64 emulation. |
+
+**Why macOS ARM64 is supported but Windows ARM64 is not:** Apple's toolchain enables trivial cross-compilation (`-target arm64-apple-macos11`), JavaFX has mature macOS ARM64 builds (via Azul/GluonHQ), and Apple Silicon rapidly became the majority Mac platform. None of these advantages existed for Windows ARM64 — JavaFX Windows ARM64 builds are scarce (the primary blocker), and the WPILib team had no test hardware until 2025. The 2027 release removes all JavaFX tools, eliminating the main blocker.
+
+### What Works Perfectly on ARM64
+
+- VS Code with all WPILib commands (ARM64-native)
+- Java code compilation and Gradle builds (deploy to roboRIO)
+- cpptools IntelliSense for C++ (ARM64 builds since 2021)
+- Java Language Server (runs on JDK, any architecture)
+- AdvantageScope (ARM64-native Electron build)
+- Project creation, templates, vendor dependency management
+- Network-based robot communication (deploy, NetworkTables, SSH)
+- Pure-Java vendor libraries (PathPlannerLib, AdvantageKit, Limelight)
+
+### ARM64 Component Matrix (Default Config)
+
+| Component | Strategy | Speed | Simulation? |
+|---|---|---|---|
+| **JDK 17** | x64 Temurin under Prism (default) | Emulated | **Yes** |
+| **JDK 17** | ARM64 Microsoft OpenJDK (`-UseArm64Jdk`) | **Native** | **No** |
+| **Gradle** | Pure Java — runs on whichever JDK | Matches JDK | N/A |
+| **cpptools / redhat.java** | Marketplace (auto-selects ARM64) | **Native** | N/A |
+| **WPILib + JS extensions** | VSIX from ISO (architecture-independent) | **Native** | N/A |
+| **AdvantageScope** | ARM64 build from GitHub releases | **Native** | N/A |
+| **roboRIO toolchain** | x64 GCC under Prism emulation | ~30-50% slower | N/A |
+| **Native tools** (Glass, SysId) | x64 under Prism emulation | ~20-30% slower | N/A |
+| **Elastic Dashboard** | x64 Flutter under Prism emulation | ~20-30% slower | N/A |
 
 ### ARM64 Quick Start
 
@@ -134,8 +157,11 @@ cd C:\src\WPILibFrankenCode
 ### ARM64 Options
 
 ```powershell
-# Use x64 JDK from ISO under emulation (skip downloading ARM64 JDK)
-.\Install-WPILibFrankenCode-ARM64.ps1 -SkipJdkReplace
+# Default: x64 JDK under emulation (full compatibility, simulation works)
+.\Install-WPILibFrankenCode-ARM64.ps1
+
+# Native ARM64 JDK (faster builds, but simulation and JNI tests BROKEN)
+.\Install-WPILibFrankenCode-ARM64.ps1 -UseArm64Jdk
 
 # Skip ARM64 AdvantageScope download (use x64 from ISO)
 .\Install-WPILibFrankenCode-ARM64.ps1 -SkipAdvantageScopeArm64
@@ -147,8 +173,8 @@ cd C:\src\WPILibFrankenCode
 ### Key Technical Details
 
 - **Windows 11 Prism emulator** handles all x64 components transparently
-- The script detects whether VS Code itself is ARM64-native and adjusts extension strategy accordingly
-- **Java builds run at full native speed** — only C++ cross-compilation is affected by emulation
+- The script detects whether VS Code itself is ARM64-native (via PE header) and adjusts extension strategy
+- The `-UseArm64Jdk` flag is opt-in because of the JNI blocker — read `Get-Help .\Install-WPILibFrankenCode-ARM64.ps1 -Full` for the complete known-limitations document
 - The verification phase includes an ARM64 Architecture Report showing which components are native vs emulated
 
 ## Idempotency

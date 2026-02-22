@@ -3,22 +3,27 @@
     WPILib FrankenCode Installer (ARM64) — Installs WPILib 2026 on Windows ARM64.
 
 .DESCRIPTION
-    Variant of the FrankenCode installer adapted for Windows 11 ARM64 (Snapdragon,
-    etc.). Downloads the official WPILib 2026.2.1 x64 ISO and extracts all
-    development artifacts, but replaces architecture-sensitive components:
+    Variant of the FrankenCode installer adapted for Windows 11 ARM64 (Snapdragon X,
+    Surface Pro, etc.). Downloads the official WPILib 2026.2.1 x64 ISO and extracts
+    all development artifacts, with ARM64-specific adaptations:
 
-    ● JDK 17 — Replaces bundled Temurin x64 with Microsoft OpenJDK 17 ARM64
-    ● VS Code Extensions — Installs cpptools & redhat.java from marketplace
-      (auto-selects ARM64 platform variant) instead of using x64 VSIX from ISO
-    ● AdvantageScope — Downloads ARM64-native Electron build from GitHub
-    ● roboRIO Toolchain — Uses x64 binaries under Prism emulation (no ARM64 build)
-    ● Desktop Tools (Glass, SysId, etc.) — x64 C++ apps, run under emulation
-    ● Java Tools (Shuffleboard, PathWeaver) — Run natively on ARM64 JDK
-    ● Elastic Dashboard — x64 Flutter app, runs under emulation (no ARM64 build)
+    ● JDK 17 — Uses the x64 Temurin JDK from the ISO under Prism emulation by default.
+      This ensures full compatibility with simulation and unit tests (see KNOWN
+      LIMITATIONS below). Use -UseArm64Jdk to opt in to a native ARM64 JDK instead.
+    ● VS Code Extensions — Installs cpptools & redhat.java from the VS Code
+      Marketplace (auto-selects platform-correct variant) instead of using
+      x64-only VSIX files from the ISO.
+    ● AdvantageScope — Downloads ARM64-native Electron build from GitHub releases.
+    ● roboRIO Toolchain — Uses x64 binaries under Prism emulation (no ARM64 host
+      build exists; GCC/Binutils do not support Windows ARM64 as a host platform).
+    ● Desktop Tools — Native C++ tools (Glass, SysId, DataLogTool, OutlineViewer)
+      run under Prism emulation. Pure Java tools (Shuffleboard, PathWeaver,
+      RobotBuilder, SmartDashboard) run on whatever JDK is installed.
+    ● Elastic Dashboard — x64 Flutter app, runs under Prism emulation
+      (no ARM64 build; Flutter Windows ARM64 support is still maturing).
 
-    Windows 11's Prism x86_64 emulator handles all x64 components transparently.
-    C++ build times may be ~30-50% slower than native x64 due to cross-compiler
-    emulation overhead; Java builds run at native speed with the ARM64 JDK.
+    Windows 11's Prism x86_64 emulator handles ALL x64 components transparently.
+    The emulation overhead is ~20-50% depending on workload type.
 
 .PARAMETER WPILibYear
     The FRC season year. Default: 2026
@@ -41,8 +46,15 @@
 .PARAMETER SkipCopilotCLI
     Skip Copilot CLI extension setup.
 
-.PARAMETER SkipJdkReplace
-    Skip replacing the ISO's x64 JDK with ARM64 JDK (use x64 JDK under emulation).
+.PARAMETER UseArm64Jdk
+    Download and install Microsoft OpenJDK 17 ARM64 instead of using the x64 JDK
+    from the ISO. This gives native-speed Java compilation and Gradle builds, but
+    BREAKS SIMULATION AND UNIT TESTS that use WPILib's JNI native libraries.
+
+    See KNOWN LIMITATIONS for the full tradeoff.
+
+    Only recommended for Java-only teams that do NOT use simulation or JNI-dependent
+    unit tests on this machine (e.g., you deploy directly to a roboRIO and test there).
 
 .PARAMETER SkipAdvantageScopeArm64
     Skip downloading ARM64 AdvantageScope (use the x64 version from ISO under emulation).
@@ -52,17 +64,141 @@
 
 .EXAMPLE
     .\Install-WPILibFrankenCode-ARM64.ps1
-    # Full ARM64-optimized installation
+    # Default: x64 JDK under emulation (full compatibility, simulation works)
 
 .EXAMPLE
-    .\Install-WPILibFrankenCode-ARM64.ps1 -SkipJdkReplace
-    # Use the x64 JDK from the ISO under emulation instead of downloading ARM64 JDK
+    .\Install-WPILibFrankenCode-ARM64.ps1 -UseArm64Jdk
+    # Native ARM64 JDK (faster builds, but simulation/JNI tests BROKEN)
+
+.EXAMPLE
+    .\Install-WPILibFrankenCode-ARM64.ps1 -SkipDesktopTools -SkipCopilotCLI
+    # Minimal install — extensions and toolchain only
 
 .NOTES
     Requires: Windows 11 ARM64, Administrator privileges, VS Code installed, internet.
-    The x64 WPILib ISO is used as the base — there is no official ARM64 ISO.
+    The x64 WPILib ISO is used as the base — there is no official ARM64 Windows ISO.
     Author:   WPILibFrankenCode Project
-    Version:  1.0.0-arm64
+    Version:  1.1.0-arm64
+
+    ═══════════════════════════════════════════════════════════════════════════
+    KNOWN LIMITATIONS — Read before using on ARM64 Windows
+    ═══════════════════════════════════════════════════════════════════════════
+
+    1. JNI ARCHITECTURE MISMATCH (BLOCKER with -UseArm64Jdk)
+       ─────────────────────────────────────────────────────
+       Java Native Interface (JNI) requires native DLLs to match the JVM's
+       architecture EXACTLY. An ARM64 JVM CANNOT load x64 DLLs — this is a
+       fundamental JVM constraint, not a WPILib bug.
+
+       WPILib ships x64-only native libraries (wpiHal, ntcore, cscore, wpiutil,
+       etc.) in the desktop simulation artifacts. The runtime loader
+       (CombinedRuntimeLoader.java) also lacks Windows ARM64 path detection —
+       it falls through to the x64 path and then fails with UnsatisfiedLinkError.
+
+       What breaks with -UseArm64Jdk:
+         • simulateJava / simulateNative (HAL simulation plugins are x64 DLLs)
+         • Unit tests that touch HAL, motor controllers, sensors, or JNI classes
+         • Vendor library simulation (CTRE Phoenix, REV, PhotonVision JNI)
+
+       What still works with -UseArm64Jdk:
+         • gradlew build (compiles Java, does not load desktop native libs)
+         • Deploy to roboRIO (cross-compiles for roboRIO ARM, no desktop JNI)
+         • Pure Java unit tests that don't touch WPILib hardware interfaces
+
+       Without -UseArm64Jdk (the DEFAULT), the x64 JDK runs under Prism
+       emulation and loads x64 DLLs normally — everything works, just slower.
+
+    2. GRADLE NATIVE C++ DEPENDENCY RESOLUTION (with -UseArm64Jdk)
+       ──────────────────────────────────────────────────────────────
+       GradleRIO detects the host platform via System.getProperty("os.arch").
+       On an ARM64 JDK, this returns "aarch64", causing GradleRIO to resolve
+       artifacts with the "windowsarm64" classifier.
+
+       WPILib's OWN windowsarm64 C++ artifacts DO exist on FRC Maven (they
+       are cross-compiled from x64 CI runners). However, vendor libraries
+       (CTRE Phoenix 6, REV REVLib, PhotonVision, etc.) almost certainly do
+       NOT publish windowsarm64 native artifacts. This can cause:
+         • Gradle resolution failures for vendor native dependencies
+         • Link errors for C++ desktop builds
+
+       The x64 JDK (default) avoids this entirely — os.arch reports "amd64"
+       and all dependencies resolve with the standard "windowsx86-64" classifier.
+
+    3. NO OFFICIAL WPILIB SUPPORT (tracked for 2027)
+       ───────────────────────────────────────────────
+       WPILib's official system requirements state:
+         "64-bit Windows 10 or 11 (Arm and 32-bit are not supported)"
+
+       This is tracked in allwpilib issue #3165, assigned to the 2027 milestone.
+       The primary blockers for official support are:
+
+       a) JavaFX — Shuffleboard, PathWeaver, SysId, DataLogTool, and RobotBuilder
+          all require JavaFX, which has limited Windows ARM64 availability.
+          These JavaFX tools are being REMOVED in the 2027 WPILib release,
+          eliminating this blocker.
+
+       b) roboRIO cross-compiler — GCC/Binutils do not support Windows ARM64 as
+          a host platform (opensdk issue #66). The x64 cross-compiler works fine
+          under Prism emulation. A Clang-based toolchain is being considered.
+
+       c) Gradle C++ plugin — Gradle's native C++ plugin does not support ARM64
+          Windows hosts. WPILib developer ThadHouse noted: "Arm64 will likely be
+          Java and Python only for a while." C++ desktop builds require the
+          x64 JDK + emulation.
+
+    4. WHY MACOS ARM64 IS SUPPORTED BUT WINDOWS ARM64 IS NOT
+       ─────────────────────────────────────────────────────────
+       Apple's toolchain provides trivial cross-compilation from Intel Macs
+       via '-target arm64-apple-macos11'. Apple Silicon rapidly became the
+       majority Mac platform, creating urgent demand. JavaFX has mature ARM64
+       builds for macOS (via Azul/GluonHQ). GitHub Actions got macOS ARM64
+       CI runners earlier. None of these advantages existed for Windows ARM64
+       until recently. The WPILib dev team also noted they had no Windows ARM64
+       test hardware until 2025.
+
+    5. NI TOOLS AND DRIVER STATION (UNTESTED)
+       ──────────────────────────────────────────
+       The FRC Driver Station and NI roboRIO Imaging Tool are x64 applications.
+       User-mode x64 apps run fine under Prism emulation. However, NI tools
+       install kernel-mode USB drivers for roboRIO communication, and kernel
+       drivers CANNOT be emulated — they must be ARM64-native. If NI's USB
+       drivers are x64-only, roboRIO USB communication may fail on ARM64.
+       Network-based communication (deploy over WiFi/Ethernet) is unaffected.
+       One community member reported the Driver Station worked on Windows 11
+       ARM (VMware Fusion on M1 Mac, 2022), but thorough testing is lacking.
+
+    6. VENDOR LIBRARY JNI SIMULATION (with -UseArm64Jdk)
+       ──────────────────────────────────────────────────────
+       Third-party vendor libraries with JNI simulation components (CTRE
+       Phoenix 6 phoenix6-sim, REV REVLib, PhotonVision PhotonLib) ship only
+       x64 native DLLs for Windows. These fail to load on an ARM64 JVM.
+       Pure-Java vendor libraries (PathPlannerLib, AdvantageKit, Limelight
+       NetworkTables API) are unaffected.
+
+    7. THINGS THAT WORK PERFECTLY ON ARM64
+       ──────────────────────────────────────
+         • VS Code ARM64-native (extensions auto-select correct platform)
+         • Java code compilation and Gradle builds (deploy to roboRIO)
+         • AdvantageScope (ARM64-native Electron build available)
+         • Gradle (pure Java, architecture-independent)
+         • Maven offline repository (JAR files, architecture-independent)
+         • All VSIX extensions except cpptools/redhat.java (pure JavaScript)
+         • IntelliSense for C++ (cpptools ARM64 is mature since 2021)
+         • Java Language Server (runs on JDK, any architecture)
+         • All WPILib command palette commands in VS Code
+         • Project creation, template scaffolding, vendor dep management
+         • Network-based robot communication (deploy, NetworkTables, SSH)
+
+    ═══════════════════════════════════════════════════════════════════════════
+    RECOMMENDATION
+    ═══════════════════════════════════════════════════════════════════════════
+    Use the DEFAULT configuration (x64 JDK under Prism emulation) unless you
+    have a specific reason to use -UseArm64Jdk. The emulation overhead for
+    Java builds is ~30-50% — noticeable but not a blocker for development.
+    Simulation, unit tests, and vendor JNI all work correctly with x64 JDK.
+
+    Official Windows ARM64 support is expected in WPILib 2027 (allwpilib #3165).
+    ═══════════════════════════════════════════════════════════════════════════
 #>
 
 #Requires -RunAsAdministrator
@@ -77,7 +213,7 @@ param(
     [switch]$SkipDownload,
     [switch]$SkipDesktopTools,
     [switch]$SkipCopilotCLI,
-    [switch]$SkipJdkReplace,
+    [switch]$UseArm64Jdk,
     [switch]$SkipAdvantageScopeArm64,
     [switch]$Force
 )
@@ -430,14 +566,17 @@ function Test-Prerequisites {
         }
     }
 
-    # ARM64 JDK download connectivity check
-    if (-not $SkipJdkReplace) {
+    # ARM64 JDK download connectivity check (only if user opted in)
+    if ($UseArm64Jdk) {
+        Write-Step "WARNING: -UseArm64Jdk flag detected" "WARN"
+        Write-Step "  Simulation (simulateJava) and JNI-based unit tests will NOT work" "WARN"
+        Write-Step "  See 'Get-Help .\Install-WPILibFrankenCode-ARM64.ps1 -Full' for details" "WARN"
         try {
             $null = Invoke-WebRequest -Uri "https://aka.ms/download-jdk/microsoft-jdk-17-windows-aarch64.zip" -Method Head -UseBasicParsing -TimeoutSec 10
             Write-Step "Network connectivity to Microsoft JDK CDN: OK" "OK"
         }
         catch {
-            Write-Step "Cannot reach Microsoft JDK download — use -SkipJdkReplace to use x64 JDK under emulation" "WARN"
+            Write-Step "Cannot reach Microsoft JDK download — remove -UseArm64Jdk to use x64 JDK under emulation" "WARN"
         }
     }
 
@@ -530,10 +669,11 @@ function Install-FromISO {
     # Determine which prefixes to skip
     $skipPrefixes = @("vscode/")  # Always skip bundled VS Code
 
-    # On ARM64, if we're replacing JDK, skip extracting the x64 JDK too
-    if (-not $SkipJdkReplace) {
+    # On ARM64, if user opted in to ARM64 JDK, skip extracting the x64 JDK
+    if ($UseArm64Jdk) {
         $skipPrefixes += "jdk/"
         Write-Step "Skipping ISO's x64 JDK — will be replaced with ARM64 JDK in Phase 2B" "ARM64"
+        Write-Step "  NOTE: This breaks simulation and JNI unit tests (see known limitations)" "WARN"
     }
 
     $mountResult = $null
@@ -662,8 +802,8 @@ function Install-FromISO {
         # Verify key directories exist
         $expectedDirs = @("maven", "tools", "roborio", "vsCodeExtensions",
                           "vendordeps", "frccode", "installUtils", "icons")
-        # JDK may not be present yet if we skipped it for ARM64 replacement
-        if ($SkipJdkReplace) {
+        # JDK is present from ISO if we are NOT replacing it
+        if (-not $UseArm64Jdk) {
             $expectedDirs = @("jdk") + $expectedDirs
         }
 
@@ -724,12 +864,21 @@ function Install-FromISO {
 function Install-Arm64Jdk {
     Write-Banner "Phase 2B: ARM64 JDK Installation"
 
-    if ($SkipJdkReplace) {
-        Write-Step "Skipping ARM64 JDK replacement (-SkipJdkReplace)" "SKIP"
-        Write-Step "The x64 JDK from the ISO will run under Prism emulation" "INFO"
-        $null = $script:Arm64Report.EmulatedComponents.Add("JDK 17 (x64 Temurin → Prism)")
+    if (-not $UseArm64Jdk) {
+        Write-Step "Using x64 JDK from ISO under Prism emulation (default — simulation compatible)" "OK"
+        Write-Step "  Use -UseArm64Jdk for native ARM64 JDK (faster builds, but breaks simulation)" "INFO"
+        $null = $script:Arm64Report.EmulatedComponents.Add("JDK 17 (x64 Temurin → Prism emulation — simulation compatible)")
         return
     }
+
+    Write-Step "" "INFO"
+    Write-Step "╔══════════════════════════════════════════════════════════════╗" "WARN"
+    Write-Step "║  WARNING: ARM64 JDK selected — simulation will NOT work!   ║" "WARN"
+    Write-Step "║  JNI requires DLLs to match JVM architecture exactly.      ║" "WARN"
+    Write-Step "║  WPILib ships x64-only native DLLs for desktop simulation. ║" "WARN"
+    Write-Step "║  Re-run without -UseArm64Jdk if you need simulation.       ║" "WARN"
+    Write-Step "╚══════════════════════════════════════════════════════════════╝" "WARN"
+    Write-Step "" "INFO"
 
     $yearDir = $script:Config.YearDir
     $jdkDir = Join-Path $yearDir "jdk"
@@ -1513,7 +1662,7 @@ function Test-Installation {
         $javaDetail = (& $javaExe -version 2>&1 | Select-Object -First 1) -replace '"', ''
 
         # Check if JDK is ARM64 native
-        if (-not $SkipJdkReplace) {
+        if ($UseArm64Jdk) {
             try {
                 $bytes = [System.IO.File]::ReadAllBytes($javaExe)
                 $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
@@ -1531,8 +1680,12 @@ function Test-Installation {
     }
     Add-TestResult "JDK 17 installed" $javaPresent $javaDetail
 
-    if (-not $SkipJdkReplace) {
+    if ($UseArm64Jdk) {
         Add-TestResult "JDK is ARM64-native" $jdkIsArm64 $(if ($jdkIsArm64) { "Microsoft OpenJDK ARM64" } else { "Expected ARM64 but got x64" })
+        Add-TestResult "JNI simulation compatible" $false "ARM64 JVM cannot load x64 native DLLs — simulation BROKEN"
+    }
+    else {
+        Add-TestResult "JNI simulation compatible" $true "x64 JDK loads x64 DLLs natively under Prism"
     }
 
     # ── roboRIO Toolchain ──
@@ -1657,13 +1810,14 @@ function Test-Installation {
 function Main {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-    Write-Banner "WPILib FrankenCode Installer v1.0.0-arm64"
+    Write-Banner "WPILib FrankenCode Installer v1.1.0-arm64"
     Write-Step "WPILib Version: $($script:Config.Version)" "INFO"
     Write-Step "Season Year: $($script:Config.Year)" "INFO"
     Write-Step "Install Dir: $($script:Config.YearDir)" "INFO"
     Write-Step "Download Dir: $($script:Config.DownloadDir)" "INFO"
     Write-Step "Platform: Windows ARM64" "ARM64"
-    Write-Step "JDK Strategy: $(if ($SkipJdkReplace) { 'Use x64 from ISO (emulated)' } else { 'Replace with ARM64-native Microsoft OpenJDK' })" "ARM64"
+    Write-Step "JDK Strategy: $(if ($UseArm64Jdk) { 'ARM64-native Microsoft OpenJDK (NO simulation)' } else { 'x64 Temurin from ISO under Prism emulation (simulation compatible)' })" "ARM64"
+    Write-Step "Official ARM64 support: Expected in WPILib 2027 (allwpilib #3165)" "ARM64"
     Write-Host ""
 
     # Phase 0: Prerequisites
