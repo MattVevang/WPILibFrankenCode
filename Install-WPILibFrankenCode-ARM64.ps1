@@ -10,6 +10,10 @@
     ● JDK 17 — Uses the x64 Temurin JDK from the ISO under Prism emulation by default.
       This ensures full compatibility with simulation and unit tests (see KNOWN
       LIMITATIONS below). Use -UseArm64Jdk to opt in to a native ARM64 JDK instead.
+    ● JDK 21 (Language Server) — Downloads Microsoft JDK 21 ARM64 and installs it to
+      jdk21ls/. Used ONLY to start the VS Code Java Language Server (redhat.java
+      extension requires JDK 21+ since v1.30). Robot code compilation still targets
+      JDK 17. The LS is pure Java and never touches WPILib JNI, so ARM64-native is safe.
     ● VS Code Extensions — Installs cpptools & redhat.java from the VS Code
       Marketplace (auto-selects platform-correct variant) instead of using
       x64-only VSIX files from the ISO.
@@ -78,7 +82,7 @@
     Requires: Windows 11 ARM64, Administrator privileges, VS Code installed, internet.
     The x64 WPILib ISO is used as the base — there is no official ARM64 Windows ISO.
     Author:   WPILibFrankenCode Project
-    Version:  1.1.0-arm64
+    Version:  1.2.0-arm64
 
     ═══════════════════════════════════════════════════════════════════════════
     KNOWN LIMITATIONS — Read before using on ARM64 Windows
@@ -238,6 +242,11 @@ $script:Config = @{
     # ARM64-specific: Microsoft Build of OpenJDK 17 for Windows ARM64
     Arm64JdkUrl      = "https://aka.ms/download-jdk/microsoft-jdk-17-windows-aarch64.zip"
     Arm64JdkZipName  = "microsoft-jdk-17-windows-aarch64.zip"
+    # JDK 21 for VS Code Java Language Server (required by redhat.java >= 1.30)
+    # This is SEPARATE from the build JDK — the LS only needs JRE 21+, no JNI
+    # ARM64: native ARM64 JDK 21 is fine here (LS is pure Java, no WPILib JNI)
+    Jdk21LsUrl       = "https://aka.ms/download-jdk/microsoft-jdk-21-windows-aarch64.zip"
+    Jdk21LsZipName   = "microsoft-jdk-21-windows-aarch64.zip"
     # ARM64-specific: AdvantageScope ARM64 build
     # NOTE: The exact asset filename varies per release — we discover it dynamically
     AdvantageScopeRepo = "Mechanical-Advantage/AdvantageScope"
@@ -961,6 +970,96 @@ function Install-Arm64Jdk {
 # PHASE 2C: ARM64 ADVANTAGESCOPE (OPTIONAL)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2D: JDK 21 FOR VS CODE JAVA LANGUAGE SERVER
+# ─────────────────────────────────────────────────────────────────────────────
+
+function Install-Jdk21LanguageServer {
+    Write-Banner "Phase 2D: JDK 21 Language Server Installation"
+
+    # Why a second JDK?
+    #   redhat.java (VS Code Java extension) >= v1.30 requires JDK 21+ to LAUNCH
+    #   its embedded language server (Eclipse JDT-LS). This is separate from the
+    #   JDK used to BUILD robot code — WPILib Gradle still targets JDK 17.
+    #
+    #   java.jdt.ls.java.home → JDK 21  (starts the IntelliSense daemon)
+    #   java.configuration.runtimes → JDK 17 as default (compiles robot code)
+    #   JAVA_HOME / terminal PATH    → JDK 17 (Gradle build path, unchanged)
+    #
+    #   On ARM64, using an ARM64-native JDK 21 for the LS is safe: the language
+    #   server is pure Java and never loads WPILib JNI native DLLs.
+
+    $yearDir     = $script:Config.YearDir
+    $jdk21LsPath = Join-Path $yearDir "jdk21ls"
+    $downloadDir = $script:Config.DownloadDir
+
+    # Check if already installed and valid
+    $jdk21Exe = Join-Path $jdk21LsPath "bin\java.exe"
+    if ((Test-Path $jdk21Exe) -and -not $Force) {
+        $ver = (& $jdk21Exe -version 2>&1 | Select-Object -First 1) -replace '"', ''
+        if ($ver -match '2[1-9]\.|[3-9]\d\.') {
+            Write-Step "JDK 21 LS already installed: $ver" "SKIP"
+            $null = $script:Arm64Report.NativeComponents.Add("JDK 21 LS (Microsoft OpenJDK ARM64 — language server only)")
+            return
+        }
+    }
+
+    Write-Step "Downloading Microsoft JDK 21 ARM64 for VS Code language server" "ARM64"
+    Write-Step "  NOTE: ARM64-native JDK 21 is safe for the LS — no WPILib JNI involved" "INFO"
+    Write-Step "  JDK 17 (builds + simulation) is unchanged" "INFO"
+
+    $jdk21ZipPath = Join-Path $downloadDir $script:Config.Jdk21LsZipName
+    $needDownload = $true
+    if ((Test-Path $jdk21ZipPath) -and -not $Force) {
+        $sz = (Get-Item $jdk21ZipPath).Length
+        if ($sz -gt 100MB) {
+            Write-Step "JDK 21 zip already cached ($('{0:N0}' -f ($sz/1MB)) MB) — reusing" "SKIP"
+            $needDownload = $false
+        } else {
+            Remove-Item $jdk21ZipPath -Force
+        }
+    }
+    if ($needDownload) {
+        Invoke-DownloadWithProgress -Url $script:Config.Jdk21LsUrl -OutFile $jdk21ZipPath -Description "Microsoft JDK 21 ARM64 (language server)"
+    }
+
+    # Clean and extract
+    if (Test-Path $jdk21LsPath) { Remove-Item $jdk21LsPath -Recurse -Force }
+    $tempDir = Join-Path $downloadDir "jdk21ls-temp"
+    if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
+
+    Expand-ArchiveSafe -Path $jdk21ZipPath -DestinationPath $tempDir -Description "Extracting JDK 21 LS"
+
+    $extracted = Get-ChildItem $tempDir -Directory | Select-Object -First 1
+    if (-not $extracted) { throw "Could not find JDK directory in extracted JDK 21 archive" }
+
+    Write-Step "Moving $($extracted.Name) → jdk21ls/" "ACTION"
+    Move-Item $extracted.FullName $jdk21LsPath -Force
+    Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    # Verify
+    if (-not (Test-Path $jdk21Exe)) {
+        throw "JDK 21 LS installation failed — java.exe not found at $jdk21Exe"
+    }
+    $ver = (& $jdk21Exe -version 2>&1 | Select-Object -First 1) -replace '"', ''
+    Write-Step "JDK 21 LS installed: $ver" "OK"
+
+    # Verify ARM64-native
+    try {
+        $bytes    = [System.IO.File]::ReadAllBytes($jdk21Exe)
+        $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+        $machine  = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+        if ($machine -eq 0xAA64) {
+            Write-Step "Confirmed: jdk21ls/bin/java.exe is ARM64-native" "ARM64"
+            $null = $script:Arm64Report.NativeComponents.Add("JDK 21 LS (Microsoft OpenJDK ARM64 — language server only)")
+        } else {
+            Write-Step "JDK 21 LS architecture: 0x$($machine.ToString('X4'))" "WARN"
+        }
+    } catch {
+        Write-Step "Could not verify JDK 21 LS architecture: $_" "WARN"
+    }
+}
+
 function Install-Arm64AdvantageScope {
     Write-Banner "Phase 2C: ARM64 AdvantageScope"
 
@@ -1392,21 +1491,31 @@ function Install-VSCodeExtensions {
 function Set-VSCodeSettings {
     Write-Banner "Phase 6: VS Code Settings Configuration"
 
-    $yearDir = $script:Config.YearDir
-    $jdkPath = Join-Path $yearDir "jdk"
+    $yearDir     = $script:Config.YearDir
+    $jdkPath     = Join-Path $yearDir "jdk"       # JDK 17 — WPILib builds & Gradle
+    $jdk21LsPath = Join-Path $yearDir "jdk21ls"   # JDK 21 — VS Code language server
 
     $settingsPath = Join-Path $env:APPDATA "Code\User\settings.json"
 
     Write-Step "Target settings file: $settingsPath" "INFO"
 
-    # Build the WPILib settings to merge
+    # Two-JDK strategy:
+    #   java.jdt.ls.java.home          → JDK 21  (language server requires 21+)
+    #   java.configuration.runtimes    → JDK 17 default (robot code compile target)
+    #                                  + JDK 21 listed (available for project override)
+    #   JAVA_HOME / terminal PATH      → JDK 17  (Gradle build JDK, unchanged)
     $wpilibSettings = @{
-        "java.jdt.ls.java.home"        = $jdkPath
-        "java.configuration.runtimes"  = @(
+        "java.jdt.ls.java.home"       = $jdk21LsPath
+        "java.configuration.runtimes" = @(
             @{
                 "name"    = "JavaSE-17"
                 "path"    = $jdkPath
                 "default" = $true
+            },
+            @{
+                "name"    = "JavaSE-21"
+                "path"    = $jdk21LsPath
+                "default" = $false
             }
         )
         "terminal.integrated.env.windows" = @{
@@ -1418,9 +1527,10 @@ function Set-VSCodeSettings {
     Merge-JsonSetting -SettingsPath $settingsPath -NewSettings $wpilibSettings
 
     Write-Step "VS Code settings configured for WPILib" "OK"
-    Write-Step "  java.jdt.ls.java.home → $jdkPath (ARM64 JDK)" "INFO"
-    Write-Step "  JAVA_HOME → $jdkPath (terminal env)" "INFO"
-    Write-Step "  JDK bin → prepended to terminal PATH" "INFO"
+    Write-Step "  java.jdt.ls.java.home → $jdk21LsPath (JDK 21 — language server)" "INFO"
+    Write-Step "  java.configuration.runtimes[JavaSE-17] → $jdkPath (default, WPILib builds)" "INFO"
+    Write-Step "  java.configuration.runtimes[JavaSE-21] → $jdk21LsPath" "INFO"
+    Write-Step "  JAVA_HOME → $jdkPath (terminal env, Gradle builds unchanged)" "INFO"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1578,53 +1688,283 @@ start "" code %*
 # ─────────────────────────────────────────────────────────────────────────────
 
 function Install-CopilotCLI {
-    Write-Banner "Phase 8: Copilot CLI (Stretch Goal)"
+    Write-Banner "Phase 8: Copilot CLI — WPILib Integration (Stretch Goal)"
 
     if ($SkipCopilotCLI) {
         Write-Step "Skipping Copilot CLI setup (-SkipCopilotCLI)" "SKIP"
         return
     }
 
+    $yearDir    = $script:Config.YearDir
+    $year       = $script:Config.Year
+    $frcCodeDir = Join-Path $yearDir "frccode"
+    $ghAuthenticated = $false
+
+    # ── Step 1: Ensure gh CLI is installed ──
+    # Refresh PATH to pick up any recently installed programs
+    $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("PATH", "User")
+
     if (-not (Test-CommandExists "gh")) {
-        Write-Step "GitHub CLI (gh) not found — skipping Copilot CLI" "SKIP"
-        return
-    }
-
-    # Check if gh is authenticated
-    $authStatus = gh auth status 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Step "GitHub CLI not authenticated" "WARN"
-        Write-Step "Run 'gh auth login' to authenticate, then re-run with Copilot CLI" "INFO"
-        return
-    }
-    Write-Step "GitHub CLI authenticated" "OK"
-
-    # Check if copilot extension is already installed
-    $extensions = gh extension list 2>&1
-    if ($extensions -match "copilot") {
-        Write-Step "Copilot CLI extension already installed" "OK"
-    }
-    else {
-        Write-Step "Installing Copilot CLI extension..." "ACTION"
+        Write-Step "GitHub CLI (gh) not found — attempting install via winget" "ACTION"
         try {
-            gh extension install github/gh-copilot 2>&1 | ForEach-Object { Write-Step "  $_" "INFO" }
-            Write-Step "Copilot CLI extension installed" "OK"
+            winget install --id GitHub.cli --silent --accept-package-agreements --accept-source-agreements 2>&1 |
+                ForEach-Object { Write-Step "  $_" "INFO" }
+            # Reload PATH after install
+            $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+                        [Environment]::GetEnvironmentVariable("PATH", "User")
         }
         catch {
-            Write-Step "Failed to install Copilot CLI: $_" "WARN"
-            Write-Step "You can manually install with: gh extension install github/gh-copilot" "INFO"
-            return
+            Write-Step "winget install failed: $_" "WARN"
         }
     }
 
-    # Verify
-    $copilotVersion = gh copilot --version 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Step "Copilot CLI verified: $copilotVersion" "OK"
-        Write-Step "Usage: 'gh copilot suggest' or 'gh copilot explain'" "INFO"
+    if (Test-CommandExists "gh") {
+        $ghVer = gh --version 2>&1 | Select-Object -First 1
+        Write-Step "GitHub CLI: $ghVer" "OK"
     }
     else {
-        Write-Step "Copilot CLI installed but version check failed" "WARN"
+        Write-Step "GitHub CLI not available — install from https://cli.github.com/" "WARN"
+        Write-Step "Then run: gh auth login && gh extension install github/gh-copilot" "INFO"
+        # Continue to create local WPILib assets even without gh installed
+    }
+
+    # ── Step 2: Check authentication ──
+    if (Test-CommandExists "gh") {
+        $authStatus = gh auth status 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Step "GitHub CLI authenticated" "OK"
+            $ghAuthenticated = $true
+        }
+        else {
+            Write-Step "GitHub CLI is installed but NOT authenticated" "WARN"
+            Write-Step "To authenticate (run in any terminal, admin not required):" "INFO"
+            Write-Step "  gh auth login" "INFO"
+            Write-Step "Then install Copilot CLI extension:" "INFO"
+            Write-Step "  gh extension install github/gh-copilot" "INFO"
+        }
+    }
+
+    # ── Step 3: Install gh-copilot extension ──
+    if ($ghAuthenticated) {
+        $extensions = gh extension list 2>&1
+        if ($extensions -match "copilot") {
+            Write-Step "gh-copilot extension already installed" "SKIP"
+        }
+        else {
+            Write-Step "Installing gh-copilot extension..." "ACTION"
+            try {
+                gh extension install github/gh-copilot 2>&1 | ForEach-Object { Write-Step "  $_" "INFO" }
+                Write-Step "gh-copilot extension installed" "OK"
+            }
+            catch {
+                Write-Step "Failed to install gh-copilot: $_" "WARN"
+                Write-Step "Manually run: gh extension install github/gh-copilot" "INFO"
+            }
+        }
+
+        $copilotVersion = gh copilot --version 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Step "gh copilot version: $copilotVersion" "OK"
+        }
+    }
+
+    # ── Step 4: Create WPILib integration files ──
+    # These are created regardless of gh auth status so they're ready when auth is set up
+
+    Write-Step "Creating WPILib Copilot integration scripts in $frcCodeDir" "ACTION"
+    if (-not (Test-Path $frcCodeDir)) { New-Item -ItemType Directory -Path $frcCodeDir -Force | Out-Null }
+
+    # frc-ai.cmd  — wraps 'gh copilot suggest -t powershell' with WPILib env loaded
+    $frcAiCmd = Join-Path $frcCodeDir "frc-ai.cmd"
+    @"
+@echo off
+REM WPILib FRC AI Assistant
+REM Wraps 'gh copilot suggest' with the WPILib build environment pre-loaded.
+REM Usage: frc-ai [optional question]
+REM   frc-ai                                  -- interactive
+REM   frc-ai "how do I deploy my robot code"  -- direct question
+call "%~dp0frcvars${year}.bat"
+if "%~1"=="" (
+    echo.
+    echo  WPILib FRC AI Assistant  ^(gh copilot suggest^)
+    echo  ─────────────────────────────────────────────────────
+    echo  Useful starting questions:
+    echo    frc-ai "how do I build my robot project"
+    echo    frc-ai "how do I deploy to the roboRIO"
+    echo    frc-ai "how do I add a WPILib vendor library"
+    echo    frc-ai "how do I run desktop simulation"
+    echo    frc-ai "show me a Command-Based subsystem template"
+    echo    frc-ai "how do I run just my unit tests"
+    echo.
+    gh copilot suggest -t powershell
+) else (
+    gh copilot suggest -t powershell "%~1"
+)
+"@ | Set-Content $frcAiCmd -Encoding ASCII
+    Write-Step "Created: $frcAiCmd" "OK"
+
+    # frc-ai.ps1  — PowerShell version of frc-ai
+    $frcAiPs1 = Join-Path $frcCodeDir "frc-ai.ps1"
+    @"
+# WPILib FRC AI Assistant (PowerShell)
+# Wraps 'gh copilot suggest' with the WPILib build environment pre-loaded.
+# Usage:  .\frc-ai.ps1 [optional question]
+param([Parameter(ValueFromRemainingArguments)][string[]]`$Question)
+
+`$wpilibHome = Join-Path `$PSScriptRoot '..'
+`$env:JAVA_HOME = Join-Path `$wpilibHome 'jdk'
+`$env:PATH = "`$env:JAVA_HOME\bin;`$env:PATH"
+
+`$q = `$Question -join ' '
+if (-not `$q) {
+    Write-Host ''
+    Write-Host '  WPILib FRC AI Assistant  (gh copilot suggest)' -ForegroundColor Magenta
+    Write-Host '  ─────────────────────────────────────────────────────' -ForegroundColor DarkGray
+    Write-Host '  Useful starting questions:' -ForegroundColor Cyan
+    '  how do I build my robot project',
+    '  how do I deploy to the roboRIO',
+    '  how do I add a WPILib vendor library',
+    '  how do I run desktop simulation',
+    '  show me a Command-Based subsystem template',
+    '  how do I run just my unit tests' | ForEach-Object { Write-Host "    frc-ai '`$_'" -ForegroundColor White }
+    Write-Host ''
+    gh copilot suggest -t powershell
+} else {
+    gh copilot suggest -t powershell `$q
+}
+"@ | Set-Content $frcAiPs1 -Encoding UTF8
+    Write-Step "Created: $frcAiPs1" "OK"
+
+    # frc-explain.cmd  — wraps 'gh copilot explain' with WPILib env loaded
+    $frcExplainCmd = Join-Path $frcCodeDir "frc-explain.cmd"
+    @"
+@echo off
+REM WPILib FRC Explain
+REM Explains a shell command or WPILib concept using gh copilot explain.
+REM Usage: frc-explain "command or concept to explain"
+REM   frc-explain "./gradlew deploy -Pteam=1234"
+REM   frc-explain "what does RobotContainer.java do"
+call "%~dp0frcvars${year}.bat"
+if "%~1"=="" (
+    echo Usage: frc-explain "command or concept to explain"
+    echo Examples:
+    echo   frc-explain "./gradlew deploy -Pteam=1234"
+    echo   frc-explain "what does WPILib Command-Based framework mean"
+    echo   frc-explain "why does my robot code have a RobotContainer"
+) else (
+    gh copilot explain "%~1"
+)
+"@ | Set-Content $frcExplainCmd -Encoding ASCII
+    Write-Step "Created: $frcExplainCmd" "OK"
+
+    # frc-explain.ps1  — PowerShell version of frc-explain
+    $frcExplainPs1 = Join-Path $frcCodeDir "frc-explain.ps1"
+    @"
+# WPILib FRC Explain (PowerShell)
+# Explains a shell command or WPILib concept using gh copilot explain.
+# Usage:  .\frc-explain.ps1 'command or concept'
+param([Parameter(ValueFromRemainingArguments)][string[]]`$Input)
+
+`$wpilibHome = Join-Path `$PSScriptRoot '..'
+`$env:JAVA_HOME = Join-Path `$wpilibHome 'jdk'
+`$env:PATH = "`$env:JAVA_HOME\bin;`$env:PATH"
+
+`$q = `$Input -join ' '
+if (-not `$q) {
+    Write-Host 'Usage: frc-explain.ps1 <command or concept>' -ForegroundColor Yellow
+    Write-Host "  frc-explain.ps1 './gradlew deploy -Pteam=1234'" -ForegroundColor White
+    Write-Host "  frc-explain.ps1 'what does WPILib Command-Based framework mean'" -ForegroundColor White
+} else {
+    gh copilot explain `$q
+}
+"@ | Set-Content $frcExplainPs1 -Encoding UTF8
+    Write-Step "Created: $frcExplainPs1" "OK"
+
+    # ── Step 5: Write the copilot-instructions.md template ──
+    # Teams copy this file to <robot-project>/.github/copilot-instructions.md
+    # GitHub Copilot (VS Code, CLI, web) reads it as permanent project context.
+    $instructionsPath = Join-Path $yearDir "wpilib-copilot-instructions.md"
+    @"
+# WPILib FRC Robot Code — GitHub Copilot Instructions
+
+This repository contains FRC (FIRST Robotics Competition) robot code using WPILib $year.
+
+## Project Overview
+- **Build system**: Gradle with the GradleRIO plugin
+- **Target hardware**: NI roboRIO running Java (or C++)
+- **WPILib version**: $($script:Config.Version)
+- **Framework**: Command-Based (subsystems + commands in `src/main/java/frc/robot/`)
+
+## Directory Structure
+``````
+src/
+  main/java/frc/robot/
+    Robot.java            -- entry point (extends TimedRobot)
+    RobotContainer.java   -- wires subsystems + commands + driver controls
+    Constants.java        -- all hardware port numbers and tuning constants
+    subsystems/           -- one file per physical mechanism
+    commands/             -- one file per autonomous action or complex operation
+``````
+
+## Common Gradle Tasks
+``````bash
+./gradlew build              # compile only (no deploy)
+./gradlew deploy             # build + deploy to roboRIO over USB or WiFi
+./gradlew simulateJava       # run desktop simulation (requires x64 JDK)
+./gradlew test               # run unit tests
+./gradlew vendordep          # check for vendor library updates
+``````
+
+## Code Conventions
+- Subsystems extend `SubsystemBase` and live in `subsystems/`
+- Command factory methods are preferred over extending `Command` directly
+  (e.g., `Commands.runOnce(...)` or `subsystem.myCommand()`)
+- `RobotContainer.java` wires everything: instantiates subsystems, binds joystick
+  buttons via `trigger.onTrue(command)`
+- Hardware port numbers and PID constants belong in `Constants.java`
+- Always guard hardware-only code with `RobotBase.isReal()` for simulation compat
+
+## Key WPILib APIs to Know
+- Motors: `TalonFX`, `SparkMax` (via vendor libs), `PWMMotorController`
+- Sensors: `DigitalInput`, `AnalogInput`, `DutyCycleEncoder`, `ADIS16470_IMU`
+- Pneumatics: `Solenoid` / `DoubleSolenoid` via `PneumaticHub` (CTRE)
+- NetworkTables: `NetworkTableInstance.getDefault()` for telemetry
+- Path following: `AutoBuilder` (PathPlanner) or `RamseteCommand` (built-in)
+- Alerts: `Alert` class for driver station messages (WPILib 2025+)
+
+## Simulation Notes
+- Desktop simulation requires x64 JDK (WPILib JNI libs are x64-only on Windows)
+  JAVA_HOME should point to `C:/Users/Public/wpilib/$year/jdk`
+- Simulation uses `REVPhysicsSim`, `DCMotorSim`, etc. from WPILib
+- Use `RobotBase.isSimulation()` to swap in simulated hardware
+
+## Copilot AI Shortcuts (from terminal)
+``````bash
+frc-ai "how do I add a subsystem"          # gh copilot suggest with WPILib context
+frc-ai "deploy command for team 1234"      # direct question
+frc-explain "./gradlew deploy -Pteam=1234" # explain a command
+``````
+"@ | Set-Content $instructionsPath -Encoding UTF8
+    Write-Step "Created template: $instructionsPath" "OK"
+    Write-Step "  Copy this to <your-robot-project>/.github/copilot-instructions.md" "INFO"
+    Write-Step "  It primes GitHub Copilot (VS Code + CLI + web) with WPILib context" "INFO"
+
+    # ── Summary ──
+    Write-Host ""
+    Write-SectionHeader "Copilot CLI — WPILib Integration Summary"
+    Write-Host "  Commands added to frccode/ (already on system PATH):" -ForegroundColor Cyan
+    Write-Host "    frc-ai [question]     -- AI command suggestions (gh copilot suggest)" -ForegroundColor White
+    Write-Host "    frc-explain [text]    -- AI explanations (gh copilot explain)" -ForegroundColor White
+    Write-Host "" 
+    Write-Host "  Project template (copy into any robot project):" -ForegroundColor Cyan
+    Write-Host "    $instructionsPath" -ForegroundColor White
+    Write-Host "    -> .github/copilot-instructions.md" -ForegroundColor DarkGray
+    Write-Host ""
+    if (-not $ghAuthenticated) {
+        Write-Host "  PENDING: Complete GitHub CLI authentication:" -ForegroundColor Yellow
+        Write-Host "    gh auth login" -ForegroundColor Yellow
+        Write-Host "    gh extension install github/gh-copilot" -ForegroundColor Yellow
     }
 }
 
@@ -1653,7 +1993,7 @@ function Test-Installation {
     # ── ARM64 Detection ──
     Add-TestResult "ARM64 system detected" (Test-IsArm64System) $env:PROCESSOR_ARCHITECTURE
 
-    # ── JDK ──
+    # ── JDK 17 (builds) ──
     $javaExe = Join-Path $yearDir "jdk\bin\java.exe"
     $javaPresent = Test-Path $javaExe
     $javaDetail = ""
@@ -1678,7 +2018,16 @@ function Test-Installation {
             catch {}
         }
     }
-    Add-TestResult "JDK 17 installed" $javaPresent $javaDetail
+    Add-TestResult "JDK 17 installed (robot builds)" $javaPresent $javaDetail
+
+    # ── JDK 21 (language server) ──
+    $java21Exe = Join-Path $yearDir "jdk21ls\bin\java.exe"
+    $java21Present = Test-Path $java21Exe
+    $java21Detail = ""
+    if ($java21Present) {
+        $java21Detail = (& $java21Exe -version 2>&1 | Select-Object -First 1) -replace '"', ''
+    }
+    Add-TestResult "JDK 21 installed (VS Code language server)" $java21Present $java21Detail
 
     if ($UseArm64Jdk) {
         Add-TestResult "JDK is ARM64-native" $jdkIsArm64 $(if ($jdkIsArm64) { "Microsoft OpenJDK ARM64" } else { "Expected ARM64 but got x64" })
@@ -1810,13 +2159,14 @@ function Test-Installation {
 function Main {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-    Write-Banner "WPILib FrankenCode Installer v1.1.0-arm64"
+    Write-Banner "WPILib FrankenCode Installer v1.2.0-arm64"
     Write-Step "WPILib Version: $($script:Config.Version)" "INFO"
     Write-Step "Season Year: $($script:Config.Year)" "INFO"
     Write-Step "Install Dir: $($script:Config.YearDir)" "INFO"
     Write-Step "Download Dir: $($script:Config.DownloadDir)" "INFO"
     Write-Step "Platform: Windows ARM64" "ARM64"
     Write-Step "JDK Strategy: $(if ($UseArm64Jdk) { 'ARM64-native Microsoft OpenJDK (NO simulation)' } else { 'x64 Temurin from ISO under Prism emulation (simulation compatible)' })" "ARM64"
+    Write-Step "JDK 21 LS: Microsoft OpenJDK 21 ARM64 (VS Code language server, native)" "ARM64"
     Write-Step "Official ARM64 support: Expected in WPILib 2027 (allwpilib #3165)" "ARM64"
     Write-Host ""
 
@@ -1834,6 +2184,9 @@ function Main {
 
     # Phase 2C: Install ARM64 AdvantageScope
     Install-Arm64AdvantageScope
+
+    # Phase 2D: JDK 21 for VS Code Java Language Server
+    Install-Jdk21LanguageServer
 
     # Phase 3: Gradle Cache
     Install-GradleCache

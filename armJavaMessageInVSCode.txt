@@ -1,0 +1,3 @@
+Java 21 or more recent is required to run the Java extension. Please download and install a recent JDK. You can still compile your projects with older JDKs by configuring ['java.configuration.runtimes'](https://github.com/redhat-developer/vscode-java/wiki/JDK-Requirements#java.configuration.runtimes)
+
+When I clicked on the dialog message it took me to <https://developers.redhat.com/products/openjdk/download?sc_cid=701f2000000RWTnAAO>.
