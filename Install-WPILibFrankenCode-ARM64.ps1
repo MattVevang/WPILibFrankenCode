@@ -1501,11 +1501,17 @@ function Set-VSCodeSettings {
 
     # Two-JDK strategy:
     #   java.jdt.ls.java.home          → JDK 21  (language server requires 21+)
+    #   java.import.gradle.java.home   → JDK 17  (Gradle extension must use x64 JDK
+    #                                    so GradleRIO sees os.arch=amd64 and resolves
+    #                                    native deps with windowsx86-64, not windowsarm64)
     #   java.configuration.runtimes    → JDK 17 default (robot code compile target)
     #                                  + JDK 21 listed (available for project override)
     #   JAVA_HOME / terminal PATH      → JDK 17  (Gradle build JDK, unchanged)
+    #   java.import.gradle.java.home  → JDK 17  (Gradle extension evaluates builds with x64 JDK
+    #                                             so os.arch="amd64" and deps resolve windowsx86-64)
     $wpilibSettings = @{
         "java.jdt.ls.java.home"       = $jdk21LsPath
+        "java.import.gradle.java.home" = $jdkPath
         "java.configuration.runtimes" = @(
             @{
                 "name"    = "JavaSE-17"
@@ -1528,6 +1534,7 @@ function Set-VSCodeSettings {
 
     Write-Step "VS Code settings configured for WPILib" "OK"
     Write-Step "  java.jdt.ls.java.home → $jdk21LsPath (JDK 21 — language server)" "INFO"
+    Write-Step "  java.import.gradle.java.home → $jdkPath (x64 JDK 17 — Gradle extension)" "INFO"
     Write-Step "  java.configuration.runtimes[JavaSE-17] → $jdkPath (default, WPILib builds)" "INFO"
     Write-Step "  java.configuration.runtimes[JavaSE-21] → $jdk21LsPath" "INFO"
     Write-Step "  JAVA_HOME → $jdkPath (terminal env, Gradle builds unchanged)" "INFO"
