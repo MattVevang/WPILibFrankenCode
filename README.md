@@ -110,24 +110,26 @@ This script uses the same x64 WPILib ISO (there is no official ARM64 ISO) but ad
 
 ### Known Limitations on ARM64
 
-| Issue | Severity | Detail |
+| Issue | Impact | Detail |
 |---|---|---|
-| **JNI simulation (with `-UseArm64Jdk`)** | **BLOCKER** | ARM64 JVM cannot load x64 native DLLs. `simulateJava`, `simulateNative`, and JNI-based unit tests fail with `UnsatisfiedLinkError`. **Default config (x64 JDK) avoids this.** |
-| **GradleRIO resolution (with `-UseArm64Jdk`)** | HIGH | ARM64 JDK reports `os.arch=aarch64`, causing Gradle to resolve `windowsarm64` native artifacts. Vendor libraries (CTRE, REV, PhotonVision) don't publish these. |
-| **No official support** | MEDIUM | WPILib requirements state "Arm is not supported." Untested by the WPILib team on Windows ARM64 hardware until recently. |
-| **NI kernel drivers** | MEDIUM | FRC Driver Station and roboRIO Imaging Tool run under x64 emulation, but their USB kernel drivers may require ARM64-native builds. Network-based deploy is unaffected. |
-| **C++ desktop builds** | LOW | Gradle's native C++ plugin doesn't support ARM64 Windows hosts. C++ builds use the x64 GCC cross-compiler under emulation (~30-50% slower). |
-| **Elastic Dashboard** | LOW | No ARM64 build exists (Flutter). Runs under x64 emulation. |
+| **JNI simulation (only with `-UseArm64Jdk`)** | **Opt-in only** | ARM64 JVM cannot load x64 native DLLs. `simulateJava`, `simulateNative`, and JNI-based unit tests fail with `UnsatisfiedLinkError`. **Does NOT affect the default config** — x64 JDK under Prism loads x64 DLLs normally, so simulation and unit tests work (just ~30-50% slower). |
+| **Vendor dep resolution (only with `-UseArm64Jdk`)** | **Opt-in only** | ARM64 JDK reports `os.arch=aarch64`, causing Gradle to resolve `windowsarm64` native artifacts. Vendor libraries (CTRE, REV, PhotonVision, AdvantageKit) don't publish these. **Does NOT affect the default config** — x64 JDK reports `amd64` and resolves standard `windowsx86-64` artifacts. |
+| **No official support** | Medium | WPILib requirements state "Arm is not supported." Tracked in [allwpilib #3165](https://github.com/wpilibsuite/allwpilib/issues/3165) for the 2027 milestone. The main blocker (JavaFX tools) is being removed in 2027. |
+| **NI kernel drivers** | Medium | FRC Driver Station and roboRIO Imaging Tool run under x64 emulation, but their USB kernel drivers may require ARM64-native builds. Network-based deploy is unaffected. |
+| **C++ desktop builds** | Low | Gradle's native C++ plugin doesn't support ARM64 Windows hosts. C++ builds use the x64 GCC cross-compiler under emulation (~30-50% slower). WPILib dev ThadHouse noted this is unlikely to change soon — "Arm64 will likely be Java and Python only for a while." |
+| **Elastic Dashboard** | Low | No ARM64 build exists (Flutter). Runs under x64 emulation with minimal overhead. |
 
-**Why macOS ARM64 is supported but Windows ARM64 is not:** Apple's toolchain enables trivial cross-compilation (`-target arm64-apple-macos11`), JavaFX has mature macOS ARM64 builds (via Azul/GluonHQ), and Apple Silicon rapidly became the majority Mac platform. None of these advantages existed for Windows ARM64 — JavaFX Windows ARM64 builds are scarce (the primary blocker), and the WPILib team had no test hardware until 2025. The 2027 release removes all JavaFX tools, eliminating the main blocker.
+**Why macOS ARM64 is supported but Windows ARM64 is not:** Apple's toolchain enables trivial cross-compilation (`-target arm64-apple-macos11`), JavaFX has mature macOS ARM64 builds (via Azul/GluonHQ), and Apple Silicon rapidly became the majority Mac platform. Windows ARM64 lacked all of these advantages — JavaFX Windows ARM64 builds are scarce (the primary blocker), and the WPILib team had no ARM64 test hardware until 2025. WPILib now cross-compiles most Windows ARM64 artifacts from x64 CI runners, and GitHub Actions gained Windows ARM64 runners in mid-2025. The 2027 release removes all JavaFX tools, eliminating the main remaining blocker.
 
 ### What Works Perfectly on ARM64
 
 - VS Code with all WPILib commands (ARM64-native)
 - Java code compilation and Gradle builds (deploy to roboRIO)
+- **Simulation and JNI unit tests** (x64 JDK under Prism loads x64 DLLs correctly — default config)
 - cpptools IntelliSense for C++ (ARM64 builds since 2021)
-- Java Language Server (runs on JDK, any architecture)
+- Java Language Server (runs on JDK 21 ARM64-native)
 - AdvantageScope (ARM64-native Electron build)
+- Gradle extension project import and analysis (uses x64 JDK via `java.import.gradle.java.home`)
 - Project creation, templates, vendor dependency management
 - Network-based robot communication (deploy, NetworkTables, SSH)
 - Pure-Java vendor libraries (PathPlannerLib, AdvantageKit, Limelight)

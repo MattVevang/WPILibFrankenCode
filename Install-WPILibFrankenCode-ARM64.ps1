@@ -88,7 +88,7 @@
     KNOWN LIMITATIONS — Read before using on ARM64 Windows
     ═══════════════════════════════════════════════════════════════════════════
 
-    1. JNI ARCHITECTURE MISMATCH (BLOCKER with -UseArm64Jdk)
+    1. JNI ARCHITECTURE MISMATCH (only with -UseArm64Jdk)
        ─────────────────────────────────────────────────────
        Java Native Interface (JNI) requires native DLLs to match the JVM's
        architecture EXACTLY. An ARM64 JVM CANNOT load x64 DLLs — this is a
@@ -109,10 +109,11 @@
          • Deploy to roboRIO (cross-compiles for roboRIO ARM, no desktop JNI)
          • Pure Java unit tests that don't touch WPILib hardware interfaces
 
-       Without -UseArm64Jdk (the DEFAULT), the x64 JDK runs under Prism
-       emulation and loads x64 DLLs normally — everything works, just slower.
+       WITHOUT -UseArm64Jdk (the DEFAULT), the x64 JDK runs under Prism
+       emulation and loads x64 DLLs normally — simulation and unit tests
+       WORK CORRECTLY, just ~30-50% slower than native.
 
-    2. GRADLE NATIVE C++ DEPENDENCY RESOLUTION (with -UseArm64Jdk)
+    2. GRADLE DEPENDENCY RESOLUTION (only with -UseArm64Jdk)
        ──────────────────────────────────────────────────────────────
        GradleRIO detects the host platform via System.getProperty("os.arch").
        On an ARM64 JDK, this returns "aarch64", causing GradleRIO to resolve
@@ -120,13 +121,18 @@
 
        WPILib's OWN windowsarm64 C++ artifacts DO exist on FRC Maven (they
        are cross-compiled from x64 CI runners). However, vendor libraries
-       (CTRE Phoenix 6, REV REVLib, PhotonVision, etc.) almost certainly do
-       NOT publish windowsarm64 native artifacts. This can cause:
+       (CTRE Phoenix 6, REV REVLib, PhotonVision, AdvantageKit, etc.) do
+       NOT publish windowsarm64 native artifacts. This causes:
          • Gradle resolution failures for vendor native dependencies
          • Link errors for C++ desktop builds
 
        The x64 JDK (default) avoids this entirely — os.arch reports "amd64"
        and all dependencies resolve with the standard "windowsx86-64" classifier.
+
+       NOTE: The VS Code Gradle extension also needs to use the x64 JDK for
+       project evaluation. This installer sets java.import.gradle.java.home
+       to the x64 JDK 17 so the Gradle extension sees os.arch=amd64 even
+       though the Language Server runs on ARM64 JDK 21.
 
     3. NO OFFICIAL WPILIB SUPPORT (tracked for 2027)
        ───────────────────────────────────────────────
@@ -134,7 +140,9 @@
          "64-bit Windows 10 or 11 (Arm and 32-bit are not supported)"
 
        This is tracked in allwpilib issue #3165, assigned to the 2027 milestone.
-       The primary blockers for official support are:
+       WPILib now cross-compiles most Windows ARM64 artifacts from x64 CI, and
+       GitHub Actions gained Windows ARM64 runners in mid-2025. The remaining
+       blockers for official support are:
 
        a) JavaFX — Shuffleboard, PathWeaver, SysId, DataLogTool, and RobotBuilder
           all require JavaFX, which has limited Windows ARM64 availability.
@@ -156,9 +164,10 @@
        via '-target arm64-apple-macos11'. Apple Silicon rapidly became the
        majority Mac platform, creating urgent demand. JavaFX has mature ARM64
        builds for macOS (via Azul/GluonHQ). GitHub Actions got macOS ARM64
-       CI runners earlier. None of these advantages existed for Windows ARM64
-       until recently. The WPILib dev team also noted they had no Windows ARM64
-       test hardware until 2025.
+       CI runners earlier. Windows ARM64 lacked all of these advantages until
+       recently. WPILib now cross-compiles most ARM64 artifacts and GitHub
+       Actions gained Windows ARM64 runners in mid-2025, but the JavaFX blocker
+       remains until the 2027 release removes those tools.
 
     5. NI TOOLS AND DRIVER STATION (UNTESTED)
        ──────────────────────────────────────────
@@ -171,24 +180,29 @@
        One community member reported the Driver Station worked on Windows 11
        ARM (VMware Fusion on M1 Mac, 2022), but thorough testing is lacking.
 
-    6. VENDOR LIBRARY JNI SIMULATION (with -UseArm64Jdk)
+    6. VENDOR LIBRARY JNI SIMULATION (only with -UseArm64Jdk)
        ──────────────────────────────────────────────────────
        Third-party vendor libraries with JNI simulation components (CTRE
        Phoenix 6 phoenix6-sim, REV REVLib, PhotonVision PhotonLib) ship only
        x64 native DLLs for Windows. These fail to load on an ARM64 JVM.
        Pure-Java vendor libraries (PathPlannerLib, AdvantageKit, Limelight
        NetworkTables API) are unaffected.
+       Under the default config (x64 JDK), vendor JNI simulation works
+       correctly under Prism emulation.
 
-    7. THINGS THAT WORK PERFECTLY ON ARM64
-       ──────────────────────────────────────
+    7. THINGS THAT WORK ON ARM64 (DEFAULT CONFIG)
+       ──────────────────────────────────────────────
          • VS Code ARM64-native (extensions auto-select correct platform)
          • Java code compilation and Gradle builds (deploy to roboRIO)
+         • Simulation and JNI unit tests (x64 JDK under Prism, ~30-50% slower)
+         • Vendor library JNI simulation (x64 JDK under Prism)
          • AdvantageScope (ARM64-native Electron build available)
+         • Gradle extension project import (uses x64 JDK via settings)
          • Gradle (pure Java, architecture-independent)
          • Maven offline repository (JAR files, architecture-independent)
          • All VSIX extensions except cpptools/redhat.java (pure JavaScript)
          • IntelliSense for C++ (cpptools ARM64 is mature since 2021)
-         • Java Language Server (runs on JDK, any architecture)
+         • Java Language Server (ARM64-native JDK 21)
          • All WPILib command palette commands in VS Code
          • Project creation, template scaffolding, vendor dep management
          • Network-based robot communication (deploy, NetworkTables, SSH)
